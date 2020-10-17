@@ -102,7 +102,7 @@ def _get_model_analysis_input(cfg, use_train_input):
             cfg.DATA.TEST_CROP_SIZE,
             cfg.DATA.TEST_CROP_SIZE,
         )
-    model_inputs = pack_pathway_output(cfg, input_tensors)
+    model_inputs, _ = pack_pathway_output(cfg, input_tensors)
     for i in range(len(model_inputs)):
         model_inputs[i] = model_inputs[i].unsqueeze(0)
         if cfg.NUM_GPUS:
