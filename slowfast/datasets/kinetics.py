@@ -88,7 +88,7 @@ class Kinetics(torch.utils.data.Dataset):
         self._path_to_videos = []
         self._labels = []
         self._spatial_temporal_idx = []
-        self._path_to_bbox = []
+        self._path_to_boxes = []
         with PathManager.open(path_to_file, "r") as f:
             for clip_idx, path_label in enumerate(f.read().splitlines()):
                 assert (
@@ -102,7 +102,7 @@ class Kinetics(torch.utils.data.Dataset):
                     self._path_to_videos.append(
                         os.path.join(self.cfg.DATA.PATH_PREFIX, path)
                     )
-                    self._path_to_bbox.append(
+                    self._path_to_boxes.append(
                         os.path.join(self.cfg.DATA.PATH_PREFIX, path.replace(os.path.splitext(path)[-1], '.txt'))
                     )
                     self._labels.append(int(label))
@@ -199,7 +199,6 @@ class Kinetics(torch.utils.data.Dataset):
         # Try to decode and sample a clip from a video. If the video can not be
         # decoded, repeatly find a random video replacement that can be decoded.
         for i_try in range(self._num_retries):
-            bbox = []
             video_container = None
             try:
                 video_container = container.get_video_container(
@@ -227,19 +226,24 @@ class Kinetics(torch.utils.data.Dataset):
                     # let's try another one
                     index = random.randint(0, len(self._path_to_videos) - 1)
                 continue
-                
-            # Load bbox from txt file: [frame_idx start_x start_y end_x end_y score]
-            with open(self._path_to_bbox[index], 'r+') as f:
+             
+            boxes = []
+            b_indices = []
+            
+            # Load boxes from txt file: [frame_idx start_x start_y end_x end_y score]
+            with open(self._path_to_boxes[index], 'r+') as f:
                 for line in f.readlines():
                     # frame_idx: base 1
                     frame_idx, start_x, start_y, end_x, end_y, score = line.strip().split(self.cfg.DATA.PATH_LABEL_SEPARATOR)
-                    if (int(frame_idx)-1) == len(bbox):
-                        bbox.append([])
-                    bbox[int(frame_idx)-1].append([float(start_x), float(start_y), float(end_x), float(end_y)])
-            bbox = torch.from_numpy(np.array(bbox))
+                    boxes.append([float(start_x), float(start_y), float(end_x), float(end_y)])
+                    b_indices.append(int(float(frame_idx))-1)
+            
+            # Convert to tensor
+            boxes = torch.from_numpy(np.array(boxes))
+            b_indices = torch.from_numpy(np.array(b_indices))
             
             # Decode video. Meta info is used to perform selective decoding.
-            frames, bbox = decoder.decode(
+            frames, frame_idx, boxes, b_indices = decoder.decode(
                 video_container,
                 sampling_rate,
                 self.cfg.DATA.NUM_FRAMES,
@@ -249,7 +253,8 @@ class Kinetics(torch.utils.data.Dataset):
                 target_fps=self.cfg.DATA.TARGET_FPS,
                 backend=self.cfg.DATA.DECODING_BACKEND,
                 max_spatial_scale=min_scale,
-                bbox=bbox,
+                boxes=boxes,
+                b_indices=b_indices,
             )
 
             # If decoding failed (wrong format, video is too short, and etc),
@@ -275,7 +280,7 @@ class Kinetics(torch.utils.data.Dataset):
             # T H W C -> C T H W.
             frames = frames.permute(3, 0, 1, 2)
             # Perform data augmentation.
-            frames, bbox = utils.spatial_sampling(
+            frames, boxes = utils.spatial_sampling(
                 frames,
                 spatial_idx=spatial_sample_index,
                 min_scale=min_scale,
@@ -283,12 +288,13 @@ class Kinetics(torch.utils.data.Dataset):
                 crop_size=crop_size,
                 random_horizontal_flip=self.cfg.DATA.RANDOM_FLIP,
                 inverse_uniform_sampling=self.cfg.DATA.INV_UNIFORM_SAMPLE,
-                bbox=bbox,
+                boxes=boxes,
             )
 
             label = self._labels[index]
-            frames, bbox = utils.pack_pathway_output(self.cfg, frames, bbox=bbox)
-            return frames, label, index, {}
+            frames, boxes, b_indices = utils.pack_pathway_output(self.cfg, frames, frame_idx=frame_idx, boxes=boxes, b_indices=b_indices)
+            
+            return frames, label, index, {}, boxes, b_indices
         else:
             raise RuntimeError(
                 "Failed to fetch video after {} retries.".format(

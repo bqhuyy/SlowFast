@@ -70,7 +70,7 @@ def get_sequence(center_idx, half_len, sample_rate, num_frames):
     return seq
 
 
-def pack_pathway_output(cfg, frames, bbox=None):
+def pack_pathway_output(cfg, frames, frame_idx=None, boxes=None, b_indices=None):
     """
     Prepare output as a list of tensors. Each tensor corresponding to a
     unique pathway.
@@ -83,12 +83,16 @@ def pack_pathway_output(cfg, frames, bbox=None):
     """
     if cfg.DATA.REVERSE_INPUT_CHANNEL:
         frames = frames[[2, 1, 0], :, :, :]
+    boxes_list, b_indices_list = None, None
+    
     if cfg.MODEL.ARCH in cfg.MODEL.SINGLE_PATHWAY_ARCH:
         frame_list = [frames]
-        bbox_list = [bbox]
+        if boxes is not None and b_indices is not None:
+            boxes_list = [boxes]
+            b_indices_list = [b_indices]
+            
     elif cfg.MODEL.ARCH in cfg.MODEL.MULTI_PATHWAY_ARCH:
         fast_pathway = frames
-        fast_bbox = bbox
         # Perform temporal sampling from the fast pathway.
         slow_pathway = torch.index_select(
             frames,
@@ -97,15 +101,17 @@ def pack_pathway_output(cfg, frames, bbox=None):
                 0, frames.shape[1] - 1, frames.shape[1] // cfg.SLOWFAST.ALPHA
             ).long(),
         )
-        slow_bbox = torch.index_select(
-            bbox,
-            1,
-            torch.linspace(
-                0, frames.shape[1] - 1, frames.shape[1] // cfg.SLOWFAST.ALPHA
-            ).long(),
-        )
         frame_list = [slow_pathway, fast_pathway]
-        bbox_list = [slow_bbox, fast_bbox]
+        
+        if boxes is not None and b_indices is not None:
+            boxes_list, b_indices_list = boxes_pack_pathway_output(
+                torch.linspace(
+                    0, frames.shape[1] - 1, frames.shape[1] // cfg.SLOWFAST.ALPHA
+                ).long(),
+                frame_idx,
+                boxes,
+                b_indices,
+            )
     else:
         raise NotImplementedError(
             "Model arch {} is not in {}".format(
@@ -113,7 +119,29 @@ def pack_pathway_output(cfg, frames, bbox=None):
                 cfg.MODEL.SINGLE_PATHWAY_ARCH + cfg.MODEL.MULTI_PATHWAY_ARCH,
             )
         )
-    return frame_list, bbox_list
+    return frame_list, boxes_list, b_indices_list
+
+
+def boxes_pack_pathway_output(index, frame_idx, boxes, b_indices):
+    fast_boxes = boxes
+    fast_b_indices = b_indices
+    
+    index = torch.index_select(
+        frame_idx,
+        0,
+        index,
+    )
+    
+    mask_idx = torch.zeros_like(b_indices)
+    for i in index:
+        mask_idx = mask_idx | (b_indices == i)
+        
+    mask_idx = mask_idx.nonzero().reshape(-1)
+    
+    slow_boxes = torch.index_select(boxes, 0, mask_idx)
+    slow_b_indices = torch.index_select(b_indices, 0, mask_idx)
+    
+    return [slow_boxes, fast_boxes], [slow_b_indices, fast_b_indices]
 
 
 def spatial_sampling(
@@ -124,7 +152,7 @@ def spatial_sampling(
     crop_size=224,
     random_horizontal_flip=True,
     inverse_uniform_sampling=False,
-    bbox=None
+    boxes=None
 ):
     """
     Perform spatial sampling on the given video frames. If spatial_idx is
@@ -151,25 +179,25 @@ def spatial_sampling(
     """
     assert spatial_idx in [-1, 0, 1, 2]
     if spatial_idx == -1:
-        frames, _, bbox = transform.random_short_side_scale_jitter(
+        frames, boxes = transform.random_short_side_scale_jitter(
             images=frames,
             min_size=min_scale,
             max_size=max_scale,
             inverse_uniform_sampling=inverse_uniform_sampling,
-            bbox=bbox,
+            boxes=boxes,
         )
-        frames, _, bbox = transform.random_crop(frames, crop_size, bbox=bbox)
+        frames, boxes = transform.random_crop(frames, crop_size, boxes=boxes)
         if random_horizontal_flip:
-            frames, _, bbox = transform.horizontal_flip(0.5, frames, bbox=bbox)
+            frames, boxes = transform.horizontal_flip(0.5, frames, boxes=boxes)
     else:
         # The testing is deterministic and no jitter should be performed.
         # min_scale, max_scale, and crop_size are expect to be the same.
         assert len({min_scale, max_scale, crop_size}) == 1
-        frames, _, bbox = transform.random_short_side_scale_jitter(
-            frames, min_scale, max_scale, bbox=bbox
+        frames, boxes = transform.random_short_side_scale_jitter(
+            frames, min_scale, max_scale, boxes=boxes
         )
-        frames, _, bbox = transform.uniform_crop(frames, crop_size, spatial_idx, bbox=bbox)
-    return frames, bbox
+        frames, boxes = transform.uniform_crop(frames, crop_size, spatial_idx, boxes=boxes)
+    return frames, boxes
 
 
 def as_binary_vector(labels, num_classes):

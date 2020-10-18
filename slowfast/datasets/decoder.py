@@ -25,7 +25,33 @@ def temporal_sampling(frames, start_idx, end_idx, num_samples):
     index = torch.linspace(start_idx, end_idx, num_samples)
     index = torch.clamp(index, 0, frames.shape[0] - 1).long()
     frames = torch.index_select(frames, 0, index)
-    return frames
+    return frames, index
+
+
+def boxes_temporal_sampling(boxes, b_indices, frame_idx):
+    """
+    Given the start and end frame index, sample num_samples frames between
+    the start and end with equal interval.
+    Args:
+        frames (tensor): a tensor of video frames, dimension is
+            `num video frames` x `channel` x `height` x `width`.
+        start_idx (int): the index of the start frame.
+        end_idx (int): the index of the end frame.
+        num_samples (int): number of frames to sample.
+    Returns:
+        frames (tersor): a tensor of temporal sampled video frames, dimension is
+            `num clip frames` x `channel` x `height` x `width`.
+    """
+    mask_idx = torch.zeros_like(b_indices)
+    for i in frame_idx:
+        mask_idx = mask_idx | (b_indices == i)
+        
+    mask_idx = mask_idx.nonzero().reshape(-1)
+    
+    boxes = torch.index_select(boxes, 0, mask_idx)
+    b_indices = torch.index_select(b_indices, 0, mask_idx)
+    
+    return boxes, b_indices
 
 
 def get_start_end_idx(video_size, clip_size, clip_idx, num_clips):
@@ -290,7 +316,8 @@ def decode(
     target_fps=30,
     backend="pyav",
     max_spatial_scale=0,
-    bbox=None,
+    boxes=None,
+    b_indices=None,
 ):
     """
     Decode the video and perform temporal sampling.
@@ -361,6 +388,11 @@ def decode(
         num_clips if decode_all_video else 1,
     )
     # Perform temporal sampling from the decoded video.
-    frames = temporal_sampling(frames, start_idx, end_idx, num_frames)
-    bbox = temporal_sampling(bbox, start_idx, end_idx, num_frames)
-    return frames, bbox
+    frames, frame_idx = temporal_sampling(frames, start_idx, end_idx, num_frames)
+    
+    # Denormalize
+    h, w = frames[0].shape[:2]
+    boxes[:, [0, 2]] = boxes[:, [0, 2]] * w
+    boxes[:, [1, 3]] = boxes[:, [1, 3]] * h
+    boxes, b_indices = boxes_temporal_sampling(boxes, b_indices, frame_idx)
+    return frames, frame_idx, boxes, b_indices

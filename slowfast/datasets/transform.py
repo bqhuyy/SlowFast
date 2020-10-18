@@ -7,7 +7,7 @@ import torch
 
 
 def random_short_side_scale_jitter(
-    images, min_size, max_size, boxes=None, inverse_uniform_sampling=False, bbox=None
+    images, min_size, max_size, boxes=None, inverse_uniform_sampling=False
 ):
     """
     Perform a spatial short scale jittering on the given images and
@@ -40,23 +40,18 @@ def random_short_side_scale_jitter(
     if (width <= height and width == size) or (
         height <= width and height == size
     ):
-        return images, boxes, bbox
+        return images, boxes
     new_width = size
     new_height = size
     if width < height:
         new_height = int(math.floor((float(height) / width) * size))
         if boxes is not None:
             boxes = boxes * float(new_height) / height
-        
-        if bbox is not None:
-            bbox = bbox * float(new_height) / height
+
     else:
         new_width = int(math.floor((float(width) / height) * size))
         if boxes is not None:
             boxes = boxes * float(new_width) / width
-        
-        if bbox is not None:
-            bbox = bbox * float(new_width) / width
 
     return (
         torch.nn.functional.interpolate(
@@ -66,7 +61,6 @@ def random_short_side_scale_jitter(
             align_corners=False,
         ),
         boxes,
-        bbox,
     )
 
 
@@ -82,33 +76,14 @@ def crop_boxes(boxes, x_offset, y_offset):
         cropped_boxes (ndarray or None): the cropped boxes with dimension of
             `num boxes` x 4.
     """
-    cropped_boxes = boxes.copy()
+    cropped_boxes = boxes.clone()
     cropped_boxes[:, [0, 2]] = boxes[:, [0, 2]] - x_offset
     cropped_boxes[:, [1, 3]] = boxes[:, [1, 3]] - y_offset
 
     return cropped_boxes
 
 
-def crop_bbox(bbox, x_offset, y_offset):
-    """
-    Peform crop on the bounding boxes given the offsets.
-    Args:
-        boxes (ndarray or None): bounding boxes to peform crop. The dimension
-            is `num boxes` x 4.
-        x_offset (int): cropping offset in the x axis.
-        y_offset (int): cropping offset in the y axis.
-    Returns:
-        cropped_boxes (ndarray or None): the cropped boxes with dimension of
-           `num frames` x `num boxes` x 4. (num boxes = 2)
-    """
-    cropped_bbox = bbox.clone()
-    cropped_bbox[:, :, [0, 2]] = bbox[:, :, [0, 2]] - x_offset
-    cropped_bbox[:, :, [1, 3]] = bbox[:, :, [1, 3]] - y_offset
-
-    return cropped_bbox
-
-
-def random_crop(images, size, boxes=None, bbox=None):
+def random_crop(images, size, boxes=None):
     """
     Perform random spatial crop on the given images and corresponding boxes.
     Args:
@@ -140,13 +115,11 @@ def random_crop(images, size, boxes=None, bbox=None):
     cropped_boxes = (
         crop_boxes(boxes, x_offset, y_offset) if boxes is not None else None
     )
-    
-    cropped_bbox = crop_bbox(bbox, x_offset, y_offset) if bbox is not None else None
 
-    return cropped, cropped_boxes, cropped_bbox
+    return cropped, cropped_boxes
 
 
-def horizontal_flip(prob, images, boxes=None, bbox=None):
+def horizontal_flip(prob, images, boxes=None):
     """
     Perform horizontal flip on the given images and corresponding boxes.
     Args:
@@ -164,12 +137,7 @@ def horizontal_flip(prob, images, boxes=None, bbox=None):
     if boxes is None:
         flipped_boxes = None
     else:
-        flipped_boxes = boxes.copy()
-        
-    if bbox is None:
-        flipped_bbox = None
-    else:
-        flipped_bbox = bbox.clone()
+        flipped_boxes = boxes.clone()
 
     if np.random.uniform() < prob:
         images = images.flip((-1))
@@ -177,14 +145,11 @@ def horizontal_flip(prob, images, boxes=None, bbox=None):
         width = images.shape[3]
         if boxes is not None:
             flipped_boxes[:, [0, 2]] = width - boxes[:, [2, 0]] - 1
-        
-        if bbox is not None:
-            flipped_bbox[:, :,[0, 2]] = width - bbox[:, :, [2, 0]] - 1
 
-    return images, flipped_boxes, flipped_bbox
+    return images, flipped_boxes
 
 
-def uniform_crop(images, size, spatial_idx, boxes=None, bbox=None):
+def uniform_crop(images, size, spatial_idx, boxes=None):
     """
     Perform uniform spatial sampling on the images and corresponding boxes.
     Args:
@@ -226,10 +191,8 @@ def uniform_crop(images, size, spatial_idx, boxes=None, bbox=None):
     cropped_boxes = (
         crop_boxes(boxes, x_offset, y_offset) if boxes is not None else None
     )
-    
-    cropped_bbox = crop_bbox(bbox, x_offset, y_offset) if bbox is not None else None
 
-    return cropped, cropped_boxes, cropped_bbox
+    return cropped, cropped_boxes
 
 
 def clip_boxes_to_image(boxes, height, width):
